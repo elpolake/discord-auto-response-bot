@@ -107,4 +107,4 @@ You can make the bot act like:
 
 ## 📄 License
 
-This project is licensed under the MIT License.
+This project is licensed under the GNU GPL v3 License.

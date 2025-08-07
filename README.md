@@ -32,8 +32,8 @@ A custom Discord selfbot that uses local AI (Ollama with Dolphin 3) to automatic
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/discord-selfbot-ai.git
-cd discord-selfbot-ai
+git clone https://github.com/elpolake/discord-auto-response-bot.git
+cd discord-auto-response-bot
 ```
 
 ### 2. Install requirements

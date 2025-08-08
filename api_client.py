@@ -2,6 +2,7 @@ import aiohttp
 import json
 from typing import Optional
 from error_handling import safe_query
+from config import config_manager
 
 
 class OllamaClient:
@@ -31,9 +32,8 @@ class OllamaClient:
                 {
                     "role": "system",
                     "content": (
-                        "You are a ruthless chatbot. "
-                        "Use slang, swear words, insults, and be brutal. "
-                        "No censorship, no filters. Be creative and harsh."
+
+                        config_manager.config["bot_prompt"]
                     )
                 },
                 {"role": "user", "content": prompt}

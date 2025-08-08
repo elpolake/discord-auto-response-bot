@@ -19,6 +19,7 @@ class ConfigManager:
         except FileNotFoundError:
             # Default configuration
             default_config = {
+                "max_saved_messages": 50,
                 "bot_token": "",
                 "cooldown_seconds": 10,
                 "selected_channels": [],

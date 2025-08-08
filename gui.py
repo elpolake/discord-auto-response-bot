@@ -53,6 +53,19 @@ class BotGUI:
 
         self.load_chats()
 
+        savedmessages_frame = ttk.Frame(frame)
+        savedmessages_frame.pack(fill="x", pady=10)
+
+        ttk.Label(savedmessages_frame, text="Messages to save in each chat:").pack(side="left")
+        self.savedmessages_var = tk.IntVar(value=config_manager.config.get("max_saved_messages", 10))
+        savedmessages_spin = ttk.Spinbox(savedmessages_frame, from_=1, to=3600, textvariable=self.savedmessages_var,
+                                         width=5)
+        savedmessages_spin.pack(side="left", padx=5)
+        savedmessages_spin.bind("<FocusOut>", self.on_savedmessages_change)
+        savedmessages_spin.bind("<Return>", self.on_savedmessages_change)
+
+
+
         cooldown_frame = ttk.Frame(frame)
         cooldown_frame.pack(fill="x", pady=10)
 
@@ -135,6 +148,12 @@ class BotGUI:
         config_manager.save_config(config_manager.config)
         self.bot.cooldown_seconds = new_cooldown
         print(f"Cooldown updated to {new_cooldown} seconds")
+
+    def on_savedmessages_change(self, event=None):
+        new_max = self.savedmessages_var.get()
+        config_manager.config["max_saved_messages"] = new_max
+        config_manager.save_config(config_manager.config)
+        print(f"Max saved messages updated to {new_max}")
 
     def on_prompt_change(self, event=None):
         new_prompt = self.prompt_text.get("1.0", "end").strip()

@@ -137,8 +137,8 @@ class DiscordBot(discord.Client):
                 })
 
                 # Trim again if over 50
-                if len(self.chat_memory[channel_id]) > 50:
-                    self.chat_memory[channel_id] = self.chat_memory[channel_id][-50:]
+                                if len(self.chat_memory[channel_id]) > max_messages:
+                    self.chat_memory[channel_id] = self.chat_memory[channel_id][-max_messages:]
 
                 self.save_memory()
             else:
@@ -147,3 +147,4 @@ class DiscordBot(discord.Client):
 
         except Exception as e:
             logging.error(f"❌ Error during message handling: {str(e)}")
+

@@ -21,6 +21,26 @@ class BotGUI:
         frame = ttk.Frame(self.root)
         frame.pack(fill="both", expand=True, padx=10, pady=10)
 
+        # --- Token field ---
+        token_frame = ttk.Frame(frame)
+        token_frame.pack(fill="x", pady=(0, 10))
+
+        ttk.Label(token_frame, text="Token:").pack(side="left")
+        self.token_var = tk.StringVar(value=config_manager.config.get("bot_token", ""))
+        self.token_entry = ttk.Entry(token_frame, textvariable=self.token_var, width=50, show="*")
+        self.token_entry.pack(side="left", padx=5, expand=True, fill="x")
+
+        self.show_token_var = tk.BooleanVar(value=False)
+        show_token_chk = ttk.Checkbutton(
+            token_frame,
+            text="Show",
+            variable=self.show_token_var,
+            command=self.toggle_token_visibility
+        )
+        show_token_chk.pack(side="left", padx=5)
+
+        # -------------------
+
         ttk.Label(frame, text="Select chats to auto-reply in:", font=('Helvetica', 12)).pack(anchor='w')
 
         select_all_button = ttk.Button(frame, text="Select All DMs", command=self.select_all_dms)
@@ -64,8 +84,6 @@ class BotGUI:
         savedmessages_spin.bind("<FocusOut>", self.on_savedmessages_change)
         savedmessages_spin.bind("<Return>", self.on_savedmessages_change)
 
-
-
         cooldown_frame = ttk.Frame(frame)
         cooldown_frame.pack(fill="x", pady=10)
 
@@ -87,6 +105,13 @@ class BotGUI:
 
         save_button = ttk.Button(frame, text="Save Configuration", command=self.save_config)
         save_button.pack(pady=10)
+
+    def toggle_token_visibility(self):
+        """Toggle visibility of the token entry"""
+        if self.show_token_var.get():
+            self.token_entry.config(show="")
+        else:
+            self.token_entry.config(show="*")
 
     def load_chats(self):
         current_chats = self.get_chats()
@@ -115,7 +140,6 @@ class BotGUI:
                 self.known_chat_ids.add(ch_id)
 
         if auto_selected_any:
-            # Save immediately to config and update bot's selected_channels
             selected_channels = [ch_id for ch_id, var in self.checkbox_vars.items() if var.get()]
             config_manager.config["selected_channels"] = selected_channels
             config_manager.save_config(config_manager.config)
@@ -175,7 +199,9 @@ class BotGUI:
             messagebox.showwarning("No selection", "Please select at least one chat to auto-reply.")
             return
 
+        # Save everything
         config_manager.config["selected_channels"] = selected_channels
+        config_manager.config["bot_token"] = self.token_var.get().strip()
         config_manager.save_config(config_manager.config)
         self.bot.selected_channels = set(selected_channels)
 

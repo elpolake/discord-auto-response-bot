@@ -1,22 +1,21 @@
 import discord
-from discord import DMChannel, GroupChannel
 import threading
 import time
 import logging
 import json
 from pathlib import Path
+from typing import Dict, Any
 
 from config import config_manager
 from error_handling import safe_query
 from api_client import OllamaClient
 from gui import BotGUI
 
-
 logging.basicConfig(level=logging.INFO)
 
 
 class DiscordBot(discord.Client):
-    MEMORY_FILE = Path("chat_memory.json")
+    MEMORY_FILE = Path("context_memory.json")  # only store distilled facts now
 
     def __init__(self):
         super().__init__()
@@ -24,28 +23,28 @@ class DiscordBot(discord.Client):
         self.selected_channels = set(
             int(c) for c in config_manager.config.get("selected_channels", [])
         )
-        self.last_reply_time = 0
+        self.last_reply_times = {}
         self.cooldown_seconds = config_manager.config.get("cooldown_seconds", 60)
         self.root = None
         self.gui = None
-        self.chat_memory = self.load_memory()  # Dict[channel_id, List[str]]
 
-    def load_memory(self):
+        self.context_memory = self.load_memory()  # Distilled facts only
+
+    def load_memory(self) -> Dict[str, Any]:
         if self.MEMORY_FILE.exists():
             try:
                 with open(self.MEMORY_FILE, "r", encoding="utf-8") as f:
                     return json.load(f)
             except Exception as e:
-                print(f"Failed to load memory: {e}")
+                logging.warning(f"Failed to load context memory: {e}")
         return {}
 
     def save_memory(self):
         try:
             with open(self.MEMORY_FILE, "w", encoding="utf-8") as f:
-                json.dump(self.chat_memory, f, indent=2)
+                json.dump(self.context_memory, f, indent=2)
         except Exception as e:
-            print(f"Failed to save memory: {e}")
-
+            logging.error(f"Failed to save context memory: {e}")
 
     async def setup_hook(self):
         await self.api_client.setup()
@@ -55,19 +54,57 @@ class DiscordBot(discord.Client):
         await super().close()
 
     async def on_ready(self):
-        logging.info(f"✅ Logged in as {self.user} (ID: {self.user.id})")
+        logging.info(f"Logged in as {self.user} (ID: {self.user.id})")
 
         def start_gui():
             try:
-                logging.info("🖥️ Starting GUI...")
+                logging.info("Starting GUI...")
                 self.gui = BotGUI(self)
                 self.root = self.gui.root
                 self.gui.run()
-                logging.info("✅ GUI event loop running")
+                logging.info("GUI event loop running")
             except Exception as e:
-                logging.error(f"❌ Failed to start GUI: {str(e)}")
+                logging.error(f"Failed to start GUI: {str(e)}")
 
         threading.Thread(target=start_gui, daemon=True).start()
+
+    async def update_memory_with_ai(self, entity_key: str, new_message: str, existing_facts: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Ask the AI what important facts to remember for a single person.
+        AI should respond with a JSON object of facts for that person only.
+        """
+        existing_facts_str = json.dumps(existing_facts, indent=2)
+
+        prompt = (
+            "You are an assistant that keeps track of important facts about one person in a conversation. "
+            "You have existing facts stored as JSON:\n"
+            f"{existing_facts_str}\n\n"
+            "A new message from them arrives:\n"
+            f"\"{new_message}\"\n\n"
+            "Update the facts JSON with any new or changed important information "
+            "(like name, preferences, relationships, ongoing topics, etc.). "
+            "Respond ONLY with the updated JSON object, no extra text."
+        )
+
+        try:
+            response_text = await safe_query(self.api_client, prompt)
+            if not response_text:
+                return existing_facts
+
+            try:
+                updated_facts = json.loads(response_text)
+                if isinstance(updated_facts, dict):
+                    return updated_facts
+                else:
+                    logging.warning("AI did not return a JSON object, ignoring update.")
+                    return existing_facts
+            except json.JSONDecodeError:
+                logging.warning("Failed to parse AI memory update as JSON, ignoring update.")
+                return existing_facts
+
+        except Exception as e:
+            logging.error(f"Error updating memory with AI: {e}")
+            return existing_facts
 
     async def on_message(self, message):
         # Ignore messages from self or bots
@@ -78,73 +115,79 @@ class DiscordBot(discord.Client):
         if not isinstance(message.channel, (discord.DMChannel, discord.GroupChannel)):
             return
 
-        # Only respond in selected channels
+        # Only respond in selected channels (by ID)
         if message.channel.id not in self.selected_channels:
-            logging.info(f"⚠️ Channel {message.channel.id} not selected for auto-reply")
+            logging.info(f"Channel {message.channel.id} not selected for auto-reply")
             return
 
-        current_time = time.time()
-        if current_time - self.last_reply_time < self.cooldown_seconds:
-            logging.info("⏳ Still in cooldown period, skipping reply")
+        # Determine human-readable key
+        if isinstance(message.channel, discord.DMChannel):
+            channel_key = f"DM:{message.channel.recipient.name}"
+            person_name = message.channel.recipient.name
+        elif isinstance(message.channel, discord.GroupChannel):
+            group_name = message.channel.name or ", ".join(m.name for m in message.channel.recipients)
+            channel_key = f"Group:{group_name}"
+            person_name = message.author.name
+        else:
             return
 
-        self.last_reply_time = current_time
+        # Check cooldown
+        last_time = self.last_reply_times.get(channel_key, 0)
+        if time.time() - last_time < self.cooldown_seconds:
+            logging.info(f"Cooldown active for {channel_key}")
+            return
+        self.last_reply_times[channel_key] = time.time()
 
-        channel_id = str(message.channel.id)
-        if channel_id not in self.chat_memory:
-            self.chat_memory[channel_id] = []
+        # Initialize group structure if needed
+        if channel_key not in self.context_memory:
+            self.context_memory[channel_key] = {} if isinstance(message.channel, discord.GroupChannel) else {}
 
-        # Append new message to chat memory
-        self.chat_memory[channel_id].append({
-            "author": message.author.name,
-            "content": message.content,
-            "timestamp": message.created_at.isoformat()
-        })
+        # Select the memory slot for the current person
+        if isinstance(message.channel, discord.GroupChannel):
+            person_facts = self.context_memory[channel_key].get(person_name, {})
+        else:
+            person_facts = self.context_memory[channel_key]
 
+        # Update only that person’s facts
+        updated_facts = await self.update_memory_with_ai(channel_key, message.content, person_facts)
 
-        max_messages = config_manager.config.get("max_saved_messages", 50)
-
-        if len(self.chat_memory[channel_id]) > max_messages:
-            self.chat_memory[channel_id] = self.chat_memory[channel_id][-max_messages:]
+        if isinstance(message.channel, discord.GroupChannel):
+            self.context_memory[channel_key][person_name] = updated_facts
+        else:
+            self.context_memory[channel_key] = updated_facts
 
         self.save_memory()
 
-        # Build the message history text for prompt
-        messages_history = "\n".join(
-            f"{msg['author']}: {msg['content']}" for msg in self.chat_memory[channel_id]
+        # Build prompt
+        if isinstance(message.channel, discord.GroupChannel):
+            known_facts_str = json.dumps(updated_facts, indent=2) if updated_facts else "No known facts yet."
+            prompt_template = config_manager.config.get(
+                "bot_prompt",
+                "You are a chatbot in a group chat. Respond to this message:"
+            )
+        else:
+            known_facts_str = json.dumps(updated_facts, indent=2) if updated_facts else "No known facts yet."
+            prompt_template = config_manager.config.get(
+                "bot_prompt",
+                "You are a chatbot. Respond to this message:"
+            )
+
+        prompt = (
+            f"{prompt_template}\n\n"
+            f"Known facts about {person_name}:\n{known_facts_str}\n\n"
+            f"{person_name}: {message.content}"
         )
 
-        prompt_template = config_manager.config.get(
-            "bot_prompt",
-            "You are a chatbot. Respond to this message:"
-        )
-
-        prompt = f"{prompt_template}\nChat history:\n{messages_history}\nUser: {message.content}"
-
-        logging.info(f"🔥 Generating reply in channel {message.channel.id}")
+        logging.info(f"Generating reply for {channel_key} ({person_name})")
 
         try:
             response = await safe_query(self.api_client, prompt)
             if response:
                 await message.reply(response)
-                logging.info("✅ Reply sent successfully")
-
-                # Save bot reply in memory
-                self.chat_memory[channel_id].append({
-                    "author": self.user.name,
-                    "content": response,
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")
-                })
-
-                # Trim again if over 50
-                                if len(self.chat_memory[channel_id]) > max_messages:
-                    self.chat_memory[channel_id] = self.chat_memory[channel_id][-max_messages:]
-
-                self.save_memory()
+                logging.info("Reply sent successfully")
             else:
-                await message.reply("Couldn't think of a reply. 😤")
-                logging.warning("⚠️ No response from API")
+                await message.reply("Sorry, I couldn't come up with a reply.")
+                logging.warning("No response from AI")
 
         except Exception as e:
-            logging.error(f"❌ Error during message handling: {str(e)}")
-
+            logging.error(f"Error sending reply: {e}")
